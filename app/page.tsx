@@ -109,7 +109,7 @@ export default function Home() {
   }, [data]);
 
   if (!authReady) return <main className="loading">正在打开内容工作台…</main>;
-  if (!userId) return <main className="login"><section><h1>内容工作台</h1><p>使用你的 Google 账号登录，在不同电脑上继续同一份项目和工时。</p><button className="primary" onClick={() => supabase.auth.signInWithOAuth({ provider: "google" })}>使用 Google 账号登录</button>{error && <div className="error">{error}</div>}</section></main>;
+  if (!userId) return <main className="login"><section><h1>内容工作台</h1><p>使用你的 Google 账号登录，在不同电脑上继续同一份项目和工时。</p><button className="primary" onClick={() => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } })}>使用 Google 账号登录</button>{error && <div className="error">{error}</div>}</section></main>;
   if (!data) return <main className="loading">{error || "正在读取内容工作台…"}</main>;
   const displayName = String(data.settings.display_name || "内容工作台");
   const selected = data.projects.find((item) => item.id === selectedId) ?? null;
