@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { loadCloudState, performCloudAction, supabase } from "../src/cloud";
 
 type Category = { id: number; name: string; color: string; default_budget_minutes: number };
 type Project = {
@@ -61,12 +62,12 @@ export default function Home() {
   const [error, setError] = useState("");
   const [projectModal, setProjectModal] = useState<Project | "new" | null>(null);
   const [sessionModal, setSessionModal] = useState<Session | "new" | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
 
   async function load() {
     try {
-      const response = await fetch("/api/state", { cache: "no-store" });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error || "读取失败");
+      const json = await loadCloudState();
       setData(json);
       setSelectedId((current) => current ?? json.active?.project_id ?? json.projects[0]?.id ?? null);
       document.title = String(json.settings?.display_name || "内容工作台");
@@ -74,14 +75,18 @@ export default function Home() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "读取失败"); }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => { setUserId(session?.user.id || null); setAuthReady(true); });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { setUserId(session?.user.id || null); setAuthReady(true); });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+  useEffect(() => { if (userId) load(); else setData(null); }, [userId]);
 
   async function action(payload: Record<string, unknown>) {
     setBusy(true);
     try {
-      const response = await fetch("/api/action", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error || "操作失败");
+      if (!userId) throw new Error("请先登录");
+      await performCloudAction(payload, userId);
       await load();
       return true;
     } catch (reason) { setError(reason instanceof Error ? reason.message : "操作失败"); return false; }
@@ -103,6 +108,8 @@ export default function Home() {
     }, { today: 0, week: 0, month: 0 });
   }, [data]);
 
+  if (!authReady) return <main className="loading">正在打开内容工作台…</main>;
+  if (!userId) return <main className="login"><section><h1>内容工作台</h1><p>使用你的 Google 账号登录，在不同电脑上继续同一份项目和工时。</p><button className="primary" onClick={() => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } })}>使用 Google 账号登录</button>{error && <div className="error">{error}</div>}</section></main>;
   if (!data) return <main className="loading">{error || "正在读取内容工作台…"}</main>;
   const displayName = String(data.settings.display_name || "内容工作台");
   const selected = data.projects.find((item) => item.id === selectedId) ?? null;
@@ -145,7 +152,7 @@ export default function Home() {
 
         {page === "工时记录" && <Records data={data} onAdd={() => setSessionModal("new")} onEdit={setSessionModal} />}
         {page === "统计图表" && <Statistics data={data} />}
-        {page === "设置中心" && <Settings data={data} action={action} />}
+        {page === "设置中心" && <Settings data={data} action={action} onLogout={() => supabase.auth.signOut()} />}
       </section>
       {projectModal && <ProjectDialog value={projectModal} categories={data.categories} busy={busy} onClose={() => setProjectModal(null)} onSave={async (payload) => { if (await action({ action: "saveProject", ...payload })) setProjectModal(null); }} onArchive={projectModal !== "new" ? async () => { if (await action({ action: "archiveProject", id: projectModal.id })) setProjectModal(null); } : undefined} />}
       {sessionModal && <SessionDialog value={sessionModal} projects={data.projects} busy={busy} onClose={() => setSessionModal(null)} onSave={async (payload) => { if (await action({ action: "saveSession", ...payload })) setSessionModal(null); }} onDelete={sessionModal !== "new" ? async () => { if (await action({ action: "deleteSession", id: sessionModal.id })) setSessionModal(null); } : undefined} />}
@@ -170,7 +177,7 @@ function Statistics({ data }: { data: State }) {
   return <><header><h1>统计图表</h1><p>查看项目投入、分类分布和累计完成情况。</p></header><div className="metrics"><Metric title="累计工时" value={formatDuration(data.sessions.reduce((n, s) => n + Number(s.effective_seconds), 0))} /><Metric title="项目总数" value={String(data.projects.length)} /><Metric title="已完成" value={String(data.projects.filter((p) => p.status === "completed").length)} /><Metric title="工时记录" value={String(data.sessions.length)} /></div><section className="panel"><h2>分类工时</h2><div className="bars">{categoryTotals.map((item) => <div className="bar-row" key={item.id}><span>{item.name}</span><div><i style={{ width: `${item.seconds / max * 100}%`, background: item.color }} /></div><strong>{formatDuration(item.seconds)}</strong></div>)}</div></section></>;
 }
 
-function Settings({ data, action }: { data: State; action: (payload: Record<string, unknown>) => Promise<boolean> }) {
+function Settings({ data, action, onLogout }: { data: State; action: (payload: Record<string, unknown>) => Promise<boolean>; onLogout: () => void }) {
   const [name, setName] = useState(String(data.settings.display_name || "内容工作台"));
   function exportCsv() {
     const rows = [["项目", "开始时间", "结束时间", "有效秒数", "备注"], ...data.sessions.map((s) => [s.project_name, localDateTime(s.started_at), localDateTime(s.ended_at), String(s.effective_seconds), s.notes])];
@@ -180,7 +187,7 @@ function Settings({ data, action }: { data: State; action: (payload: Record<stri
     const rows = data.projects.map((p) => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.category_name)}</td><td>${formatDuration(p.total_seconds)}</td><td>${p.progress_percent}%</td></tr>`).join("");
     download(`${name}_只读报告.html`, `<!doctype html><meta charset="utf-8"><title>${escapeHtml(name)}</title><style>body{font:16px sans-serif;max-width:960px;margin:40px auto;color:#17313d}table{width:100%;border-collapse:collapse}td,th{padding:10px;border:1px solid #ccd5d9;text-align:left}</style><h1>${escapeHtml(name)}</h1><table><tr><th>项目</th><th>分类</th><th>累计工时</th><th>完成度</th></tr>${rows}</table>`, "text/html;charset=utf-8");
   }
-  return <><header><h1>设置中心</h1><p>管理基础名称和数据导出。</p></header><section className="panel settings"><h2>基础设置</h2><label>软件显示名称</label><div className="inline"><input minLength={2} maxLength={20} value={name} onChange={(e) => setName(e.target.value)} /><button className="primary" onClick={() => action({ action: "saveDisplayName", value: name })}>保存</button></div><h2>数据导出</h2><div className="inline"><button onClick={exportCsv}>导出CSV</button><button onClick={exportHtml}>导出只读HTML报告</button></div></section></>;
+  return <><header><h1>设置中心</h1><p>管理基础名称和数据导出。</p></header><section className="panel settings"><h2>基础设置</h2><label>软件显示名称</label><div className="inline"><input minLength={2} maxLength={20} value={name} onChange={(e) => setName(e.target.value)} /><button className="primary" onClick={() => action({ action: "saveDisplayName", value: name })}>保存</button></div><h2>数据导出</h2><div className="inline"><button onClick={exportCsv}>导出CSV</button><button onClick={exportHtml}>导出只读HTML报告</button></div><h2>账号</h2><button onClick={onLogout}>退出登录</button></section></>;
 }
 
 function ProjectDialog({ value, categories, busy, onClose, onSave, onArchive }: { value: Project | "new"; categories: Category[]; busy: boolean; onClose: () => void; onSave: (data: Record<string, unknown>) => void; onArchive?: () => void }) {

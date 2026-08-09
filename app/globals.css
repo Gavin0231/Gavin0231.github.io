@@ -2,6 +2,10 @@
 
 :root { --ink:#17313d; --muted:#647781; --line:#d6dfe3; --bg:#f4f7f8; --nav:#2c3d42; --accent:#577987; --white:#fff; }
 * { box-sizing:border-box; }
+.login { min-height:100vh; display:grid; place-items:center; background:#f3f6f7; padding:24px; }
+.login section { width:min(440px,100%); background:white; border:1px solid #d8e0e3; border-radius:14px; padding:42px; text-align:center; box-shadow:0 18px 50px rgba(23,49,61,.08); }
+.login h1 { margin:0 0 12px; font-size:32px; }
+.login p { margin:0 0 28px; color:#58707b; line-height:1.7; }
 html, body { margin:0; min-height:100%; background:var(--bg); color:var(--ink); font-family:"Source Han Sans SC","Microsoft YaHei",system-ui,sans-serif; }
 button, input, select, textarea { font:inherit; }
 button { border:1px solid var(--line); border-radius:10px; background:#edf2f4; color:var(--ink); padding:10px 17px; cursor:pointer; font-weight:600; }
