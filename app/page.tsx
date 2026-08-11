@@ -48,10 +48,14 @@ function inputDateTime(value?: string) {
 function Timer({ active }: { active: Active }) {
   const [tick, setTick] = useState(Date.now());
   useEffect(() => { const id = setInterval(() => setTick(Date.now()), 1000); return () => clearInterval(id); }, []);
-  if (!active) return <>00:00:00</>;
+  return <>{formatDuration(activeDuration(active, tick), true)}</>;
+}
+
+function activeDuration(active: Active, tick: number) {
+  if (!active) return 0;
   let seconds = Number(active.accumulated_seconds);
   if (active.state === "running" && active.last_resumed_at) seconds += Math.max(0, Math.floor((tick - Date.parse(active.last_resumed_at)) / 1000));
-  return <>{formatDuration(seconds, true)}</>;
+  return seconds;
 }
 
 export default function Home() {
@@ -64,6 +68,7 @@ export default function Home() {
   const [sessionModal, setSessionModal] = useState<Session | "new" | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [liveTick, setLiveTick] = useState(Date.now());
 
   async function load() {
     try {
@@ -81,6 +86,11 @@ export default function Home() {
     return () => listener.subscription.unsubscribe();
   }, []);
   useEffect(() => { if (userId) load(); else setData(null); }, [userId]);
+  useEffect(() => {
+    if (!data?.active) return;
+    const id = setInterval(() => setLiveTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [data?.active?.project_id, data?.active?.state]);
 
   async function action(payload: Record<string, unknown>) {
     setBusy(true);
@@ -99,14 +109,22 @@ export default function Home() {
     const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const weekStart = new Date(dayStart); weekStart.setDate(dayStart.getDate() - ((dayStart.getDay() + 6) % 7));
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    return data.sessions.reduce((sum, item) => {
+    const totals = data.sessions.reduce((sum, item) => {
       const start = new Date(item.started_at);
       if (start >= dayStart) sum.today += Number(item.effective_seconds);
       if (start >= weekStart) sum.week += Number(item.effective_seconds);
       if (start >= monthStart) sum.month += Number(item.effective_seconds);
       return sum;
     }, { today: 0, week: 0, month: 0 });
-  }, [data]);
+    if (data.active) {
+      const live = activeDuration(data.active, liveTick);
+      const start = new Date(data.active.started_at);
+      if (start >= dayStart) totals.today += live;
+      if (start >= weekStart) totals.week += live;
+      if (start >= monthStart) totals.month += live;
+    }
+    return totals;
+  }, [data, liveTick]);
 
   if (!authReady) return <main className="loading">正在打开内容工作台…</main>;
   if (!userId) return <main className="login"><section><h1>内容工作台</h1><p>使用你的 Google 账号登录，在不同电脑上继续同一份项目和工时。</p><button className="primary" onClick={() => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } })}>使用 Google 账号登录</button>{error && <div className="error">{error}</div>}</section></main>;
@@ -114,6 +132,7 @@ export default function Home() {
   const displayName = String(data.settings.display_name || "内容工作台");
   const selected = data.projects.find((item) => item.id === selectedId) ?? null;
   const current = data.active ? data.projects.find((item) => item.id === data.active?.project_id) ?? selected : selected;
+  const currentTotalSeconds = Number(current?.total_seconds || 0) + (data.active?.project_id === current?.id ? activeDuration(data.active, liveTick) : 0);
 
   return (
     <main className="app-shell">
@@ -127,16 +146,16 @@ export default function Home() {
         {page === "工作台" && <>
           <header><h1>工作台</h1><p>选择一个项目，进入当前工作区并记录真实投入时间。</p></header>
           <div className="metrics">
-            <Metric title="今日工时" value={formatDuration(metrics.today)} />
-            <Metric title="本周工时" value={formatDuration(metrics.week)} />
-            <Metric title="本月工时" value={formatDuration(metrics.month)} />
+            <Metric title="今日工时" value={formatDuration(metrics.today, true)} />
+            <Metric title="本周工时" value={formatDuration(metrics.week, true)} />
+            <Metric title="本月工时" value={formatDuration(metrics.month, true)} />
             <Metric title="进行中项目" value={String(data.projects.filter((item) => item.status === "active").length)} />
           </div>
           <section className="current-card">
             <label>当前工作区</label><h2>{current?.name || "请选择项目"}</h2>
             {current && <div className="category" style={{ background: current.category_color }}>{current.category_name}</div>}
             <div className="timer-grid"><div><span>本次计时</span><strong><Timer active={data.active} /></strong></div><div><span>今日累计</span><strong>{formatDuration(metrics.today, true)}</strong></div></div>
-            {current && <><span>工时预算进度</span><Progress value={Math.min(100, (Number(current.total_seconds) / Math.max(1, current.budget_minutes * 60)) * 100)} /><span>项目完成度</span><Progress value={current.progress_percent} /></>}
+            {current && <><span>工时预算进度</span><Progress value={Math.min(100, (currentTotalSeconds / Math.max(1, current.budget_minutes * 60)) * 100)} /><span>项目完成度</span><Progress value={current.progress_percent} /></>}
             <div className="timer-actions">
               {!data.active && <button className="primary" disabled={!selected || busy} onClick={() => action({ action: "start", projectId: selected?.id })}>开始工作</button>}
               {data.active?.state === "running" && <button className="primary" disabled={busy} onClick={() => action({ action: "pause" })}>暂停</button>}
@@ -146,7 +165,7 @@ export default function Home() {
           </section>
           <section className="panel">
             <div className="panel-head"><div><h2>项目列表</h2><p>当前已选择：{selected?.name || "无"}</p></div><div className="toolbar"><button disabled={!selected} onClick={() => selected && setProjectModal(selected)}>编辑</button><button className="primary" onClick={() => setProjectModal("new")}>新建项目</button></div></div>
-            <ProjectTable projects={data.projects} selectedId={selectedId} onSelect={setSelectedId} />
+            <ProjectTable projects={data.projects} selectedId={selectedId} onSelect={setSelectedId} active={data.active} liveTick={liveTick} />
           </section>
         </>}
 
@@ -163,8 +182,8 @@ export default function Home() {
 function Metric({ title, value }: { title: string; value: string }) { return <div className="metric"><span>{title}</span><strong>{value}</strong></div>; }
 function Progress({ value }: { value: number }) { return <div className="progress"><i style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div>; }
 
-function ProjectTable({ projects, selectedId, onSelect }: { projects: Project[]; selectedId: number | null; onSelect: (id: number) => void }) {
-  return <div className="table-wrap"><table><thead><tr><th>项目名称</th><th>分类</th><th>优先级</th><th>状态</th><th>完成度</th><th>已用 / 预算</th></tr></thead><tbody>{projects.map((item) => <tr key={item.id} className={selectedId === item.id ? "selected" : ""} onClick={() => onSelect(item.id)}><td>{item.name}</td><td><b className="pill" style={{ background: item.category_color }}>{item.category_name}</b></td><td><b className={`pill priority-${item.priority}`}>{priorityText[item.priority]}</b></td><td>{statusText[item.status]}</td><td>{item.progress_percent}%</td><td>{formatDuration(item.total_seconds)} / {formatDuration(item.budget_minutes * 60)}</td></tr>)}</tbody></table></div>;
+function ProjectTable({ projects, selectedId, onSelect, active, liveTick }: { projects: Project[]; selectedId: number | null; onSelect: (id: number) => void; active: Active; liveTick: number }) {
+  return <div className="table-wrap"><table><thead><tr><th>项目名称</th><th>分类</th><th>优先级</th><th>状态</th><th>完成度</th><th>已用 / 预算</th></tr></thead><tbody>{projects.map((item) => { const used = Number(item.total_seconds) + (active?.project_id === item.id ? activeDuration(active, liveTick) : 0); return <tr key={item.id} className={selectedId === item.id ? "selected" : ""} onClick={() => onSelect(item.id)}><td>{item.name}</td><td><b className="pill" style={{ background: item.category_color }}>{item.category_name}</b></td><td><b className={`pill priority-${item.priority}`}>{priorityText[item.priority]}</b></td><td>{statusText[item.status]}</td><td>{item.progress_percent}%</td><td>{formatDuration(used)} / {formatDuration(item.budget_minutes * 60)}</td></tr>; })}</tbody></table></div>;
 }
 
 function Records({ data, onAdd, onEdit }: { data: State; onAdd: () => void; onEdit: (session: Session) => void }) {
