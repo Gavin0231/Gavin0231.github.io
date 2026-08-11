@@ -14,7 +14,7 @@ export async function loadCloudState() {
     supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
     supabase.from("projects").select("*, categories(name,color), time_sessions(effective_seconds,is_deleted)").eq("is_archived", false).order("updated_at", { ascending: false }),
     supabase.from("time_sessions").select("*, projects(name,categories(name))").eq("is_deleted", false).order("started_at", { ascending: false }),
-    supabase.from("active_timer").select("*, projects(name,budget_minutes,progress_percent,categories(name,color))").maybeSingle(),
+    supabase.from("active_timer").select("*, projects(name,budget_minutes,progress_percent,categories(name,color))").order("started_at"),
     supabase.from("settings").select("key,value_json"),
   ]);
   [categoriesResult, projectsResult, sessionsResult, timerResult, settingsResult].forEach((result) => fail(result.error));
@@ -31,25 +31,24 @@ export async function loadCloudState() {
     category_name: item.projects?.categories?.name || "其他",
     is_manual_adjusted: item.is_manual_adjusted ? 1 : 0,
   }));
-  const timer: any = timerResult.data;
-  const active = timer ? {
+  const actives = (timerResult.data || []).map((timer: any) => ({
     ...timer,
     project_name: timer.projects?.name || "",
     category_name: timer.projects?.categories?.name || "其他",
     category_color: timer.projects?.categories?.color || "#475569",
     budget_minutes: timer.projects?.budget_minutes || 1,
     progress_percent: timer.projects?.progress_percent || 0,
-  } : null;
+  }));
   const settings = Object.fromEntries((settingsResult.data || []).map((item: any) => [item.key, item.value_json]));
-  return { categories: categoriesResult.data || [], projects, sessions, active, settings, serverNow: new Date().toISOString() };
+  return { categories: categoriesResult.data || [], projects, sessions, actives, settings, serverNow: new Date().toISOString() };
 }
 
 export async function performCloudAction(payload: Record<string, any>, userId: string) {
   const action = payload.action;
   if (action === "start") fail((await supabase.rpc("timer_start", { p_project_id: payload.projectId })).error);
-  else if (action === "pause") fail((await supabase.rpc("timer_pause")).error);
-  else if (action === "resume") fail((await supabase.rpc("timer_resume")).error);
-  else if (action === "stop") fail((await supabase.rpc("timer_stop", { p_notes: "" })).error);
+  else if (action === "pause") fail((await supabase.rpc("timer_pause", { p_project_id: payload.projectId })).error);
+  else if (action === "resume") fail((await supabase.rpc("timer_resume", { p_project_id: payload.projectId })).error);
+  else if (action === "stop") fail((await supabase.rpc("timer_stop", { p_project_id: payload.projectId, p_notes: "" })).error);
   else if (action === "saveProject") {
     const row = { user_id: userId, name: String(payload.name).trim(), category_id: payload.categoryId, priority: payload.priority, status: payload.status, budget_minutes: payload.budgetMinutes, progress_percent: payload.progressPercent, notes: payload.notes || "", updated_at: new Date().toISOString() };
     if (!row.name) throw new Error("项目名称不能为空");

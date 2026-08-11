@@ -42,7 +42,7 @@ create table if not exists public.time_sessions (
 );
 
 create table if not exists public.active_timer (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
   project_id bigint not null references public.projects(id) on delete cascade,
   state text not null check(state in ('running','paused')),
   started_at timestamptz not null,
@@ -50,7 +50,8 @@ create table if not exists public.active_timer (
   paused_at timestamptz,
   accumulated_seconds integer not null default 0,
   accumulated_pause_seconds integer not null default 0,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  primary key(user_id, project_id)
 );
 
 create table if not exists public.settings (
@@ -60,6 +61,9 @@ create table if not exists public.settings (
   updated_at timestamptz not null default now(),
   primary key(user_id, key)
 );
+
+alter table public.active_timer drop constraint if exists active_timer_pkey;
+alter table public.active_timer add constraint active_timer_pkey primary key(user_id, project_id);
 
 alter table public.categories enable row level security;
 alter table public.projects enable row level security;
@@ -100,39 +104,42 @@ for each row execute procedure public.seed_content_workbench_user();
 create or replace function public.timer_start(p_project_id bigint)
 returns void language plpgsql security invoker as $$
 begin
-  if exists(select 1 from active_timer where user_id=auth.uid()) then raise exception '已有项目正在计时'; end if;
+  if exists(select 1 from active_timer where user_id=auth.uid() and project_id=p_project_id) then raise exception '该项目已在计时'; end if;
   if not exists(select 1 from projects where id=p_project_id and user_id=auth.uid()) then raise exception '项目不存在'; end if;
   insert into active_timer(user_id,project_id,state,started_at,last_resumed_at,updated_at)
   values(auth.uid(),p_project_id,'running',now(),now(),now());
   update projects set status='active',updated_at=now() where id=p_project_id and user_id=auth.uid();
 end $$;
 
-create or replace function public.timer_pause()
+drop function if exists public.timer_pause();
+create or replace function public.timer_pause(p_project_id bigint)
 returns void language plpgsql security invoker as $$
 begin
   update active_timer set state='paused', accumulated_seconds=accumulated_seconds+extract(epoch from (now()-last_resumed_at))::integer,
-    paused_at=now(),updated_at=now() where user_id=auth.uid() and state='running';
+    paused_at=now(),updated_at=now() where user_id=auth.uid() and project_id=p_project_id and state='running';
   if not found then raise exception '当前没有运行中的计时'; end if;
 end $$;
 
-create or replace function public.timer_resume()
+drop function if exists public.timer_resume();
+create or replace function public.timer_resume(p_project_id bigint)
 returns void language plpgsql security invoker as $$
 begin
   update active_timer set state='running', accumulated_pause_seconds=accumulated_pause_seconds+extract(epoch from (now()-paused_at))::integer,
-    last_resumed_at=now(),paused_at=null,updated_at=now() where user_id=auth.uid() and state='paused';
+    last_resumed_at=now(),paused_at=null,updated_at=now() where user_id=auth.uid() and project_id=p_project_id and state='paused';
   if not found then raise exception '当前没有暂停中的计时'; end if;
 end $$;
 
-create or replace function public.timer_stop(p_notes text default '')
+drop function if exists public.timer_stop(text);
+create or replace function public.timer_stop(p_project_id bigint, p_notes text default '')
 returns void language plpgsql security invoker as $$
 declare a active_timer%rowtype; effective integer;
 begin
-  select * into a from active_timer where user_id=auth.uid();
+  select * into a from active_timer where user_id=auth.uid() and project_id=p_project_id;
   if not found then raise exception '当前没有计时'; end if;
   effective := a.accumulated_seconds;
   if a.state='running' then effective := effective+extract(epoch from (now()-a.last_resumed_at))::integer; end if;
   insert into time_sessions(user_id,project_id,started_at,ended_at,effective_seconds,pause_seconds,notes)
   values(auth.uid(),a.project_id,a.started_at,now(),effective,a.accumulated_pause_seconds,coalesce(p_notes,''));
-  delete from active_timer where user_id=auth.uid();
+  delete from active_timer where user_id=auth.uid() and project_id=p_project_id;
   update projects set updated_at=now() where id=a.project_id and user_id=auth.uid();
 end $$;

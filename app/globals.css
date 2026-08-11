@@ -39,6 +39,14 @@ header p, .panel-head p { color:var(--muted); margin:0; }
 .progress { height:24px; margin:9px 0 15px; background:#e8eef0; border-radius:5px; overflow:hidden; }
 .progress i { height:100%; display:block; background:#67a88b; }
 .timer-actions { position:absolute; right:24px; bottom:20px; display:flex; gap:9px; }
+.active-task { margin-top:16px; padding:18px; border:1px solid rgba(255,255,255,.22); border-radius:12px; background:rgba(255,255,255,.06); }
+.active-task-head, .active-task-meta, .start-candidate { display:flex; justify-content:space-between; gap:18px; align-items:center; }
+.active-task-head h2, .start-candidate h2 { margin:4px 0 8px; }
+.active-task-head > strong { font-size:25px; white-space:nowrap; }
+.active-task .category, .start-candidate .category { position:static; display:inline-block; padding:6px 12px; }
+.active-task .timer-actions { position:static; }
+.active-task .progress { margin-bottom:0; }
+.start-candidate { margin-top:16px; padding:16px 18px; border:1px dashed rgba(255,255,255,.35); border-radius:12px; }
 .panel { margin-top:16px; padding:16px; }
 .panel.fill { min-height:calc(100vh - 155px); }
 .panel-head { display:flex; justify-content:space-between; gap:20px; align-items:center; margin-bottom:14px; }

@@ -19,8 +19,8 @@ type Active = {
   state: "running" | "paused"; started_at: string; last_resumed_at: string | null;
   accumulated_seconds: number; accumulated_pause_seconds: number;
   budget_minutes: number; progress_percent: number;
-} | null;
-type State = { categories: Category[]; projects: Project[]; sessions: Session[]; active: Active; settings: Record<string, unknown>; serverNow: string };
+};
+type State = { categories: Category[]; projects: Project[]; sessions: Session[]; actives: Active[]; settings: Record<string, unknown>; serverNow: string };
 
 const priorityText: Record<string, string> = { high: "高", medium: "中", low: "低" };
 const statusText: Record<string, string> = { not_started: "未开始", active: "进行中", paused: "已暂停", waiting: "等待中", completed: "已完成", cancelled: "已取消" };
@@ -45,13 +45,13 @@ function inputDateTime(value?: string) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function Timer({ active }: { active: Active }) {
+function Timer({ active }: { active: Active | null }) {
   const [tick, setTick] = useState(Date.now());
   useEffect(() => { const id = setInterval(() => setTick(Date.now()), 1000); return () => clearInterval(id); }, []);
   return <>{formatDuration(activeDuration(active, tick), true)}</>;
 }
 
-function activeDuration(active: Active, tick: number) {
+function activeDuration(active: Active | null, tick: number) {
   if (!active) return 0;
   let seconds = Number(active.accumulated_seconds);
   if (active.state === "running" && active.last_resumed_at) seconds += Math.max(0, Math.floor((tick - Date.parse(active.last_resumed_at)) / 1000));
@@ -74,7 +74,7 @@ export default function Home() {
     try {
       const json = await loadCloudState();
       setData(json);
-      setSelectedId((current) => current ?? json.active?.project_id ?? json.projects[0]?.id ?? null);
+      setSelectedId((current) => current ?? json.actives[0]?.project_id ?? json.projects[0]?.id ?? null);
       document.title = String(json.settings?.display_name || "内容工作台");
       setError("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "读取失败"); }
@@ -87,10 +87,10 @@ export default function Home() {
   }, []);
   useEffect(() => { if (userId) load(); else setData(null); }, [userId]);
   useEffect(() => {
-    if (!data?.active) return;
+    if (!data?.actives.length) return;
     const id = setInterval(() => setLiveTick(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [data?.active?.project_id, data?.active?.state]);
+  }, [data?.actives]);
 
   async function action(payload: Record<string, unknown>) {
     setBusy(true);
@@ -116,9 +116,9 @@ export default function Home() {
       if (start >= monthStart) sum.month += Number(item.effective_seconds);
       return sum;
     }, { today: 0, week: 0, month: 0 });
-    if (data.active) {
-      const live = activeDuration(data.active, liveTick);
-      const start = new Date(data.active.started_at);
+    for (const active of data.actives) {
+      const live = activeDuration(active, liveTick);
+      const start = new Date(active.started_at);
       if (start >= dayStart) totals.today += live;
       if (start >= weekStart) totals.week += live;
       if (start >= monthStart) totals.month += live;
@@ -131,8 +131,7 @@ export default function Home() {
   if (!data) return <main className="loading">{error || "正在读取内容工作台…"}</main>;
   const displayName = String(data.settings.display_name || "内容工作台");
   const selected = data.projects.find((item) => item.id === selectedId) ?? null;
-  const current = data.active ? data.projects.find((item) => item.id === data.active?.project_id) ?? selected : selected;
-  const currentTotalSeconds = Number(current?.total_seconds || 0) + (data.active?.project_id === current?.id ? activeDuration(data.active, liveTick) : 0);
+  const selectedActive = data.actives.find((item) => item.project_id === selected?.id) ?? null;
 
   return (
     <main className="app-shell">
@@ -152,20 +151,22 @@ export default function Home() {
             <Metric title="进行中项目" value={String(data.projects.filter((item) => item.status === "active").length)} />
           </div>
           <section className="current-card">
-            <label>当前工作区</label><h2>{current?.name || "请选择项目"}</h2>
-            {current && <div className="category" style={{ background: current.category_color }}>{current.category_name}</div>}
-            <div className="timer-grid"><div><span>本次计时</span><strong><Timer active={data.active} /></strong></div><div><span>今日累计</span><strong>{formatDuration(metrics.today, true)}</strong></div></div>
-            {current && <><span>工时预算进度</span><Progress value={Math.min(100, (currentTotalSeconds / Math.max(1, current.budget_minutes * 60)) * 100)} /><span>项目完成度</span><Progress value={current.progress_percent} /></>}
-            <div className="timer-actions">
-              {!data.active && <button className="primary" disabled={!selected || busy} onClick={() => action({ action: "start", projectId: selected?.id })}>开始工作</button>}
-              {data.active?.state === "running" && <button className="primary" disabled={busy} onClick={() => action({ action: "pause" })}>暂停</button>}
-              {data.active?.state === "paused" && <button className="primary" disabled={busy} onClick={() => action({ action: "resume" })}>继续</button>}
-              {data.active && <button disabled={busy} onClick={() => action({ action: "stop" })}>结束工作</button>}
-            </div>
+            <label>进行中的工作</label>
+            {data.actives.length === 0 && <p>当前没有正在计时的项目。</p>}
+            {data.actives.map((active) => {
+              const project = data.projects.find((item) => item.id === active.project_id);
+              const used = Number(project?.total_seconds || 0) + activeDuration(active, liveTick);
+              return <div className="active-task" key={active.project_id}>
+                <div className="active-task-head"><div><h2>{active.project_name}</h2><div className="category" style={{ background: active.category_color }}>{active.category_name}</div></div><strong><Timer active={active} /></strong></div>
+                <div className="active-task-meta"><span>已用 {formatDuration(used, true)} / 预算 {formatDuration(active.budget_minutes * 60)}</span><div className="timer-actions">{active.state === "running" ? <button className="primary" disabled={busy} onClick={() => action({ action: "pause", projectId: active.project_id })}>暂停</button> : <button className="primary" disabled={busy} onClick={() => action({ action: "resume", projectId: active.project_id })}>继续</button>}<button disabled={busy} onClick={() => action({ action: "stop", projectId: active.project_id })}>结束工作</button></div></div>
+                <Progress value={Math.min(100, (used / Math.max(1, active.budget_minutes * 60)) * 100)} />
+              </div>;
+            })}
+            {selected && !selectedActive && <div className="start-candidate"><div><span>已选择项目</span><h2>{selected.name}</h2><div className="category" style={{ background: selected.category_color }}>{selected.category_name}</div></div><button className="primary" disabled={busy} onClick={() => action({ action: "start", projectId: selected.id })}>开始工作</button></div>}
           </section>
           <section className="panel">
             <div className="panel-head"><div><h2>项目列表</h2><p>当前已选择：{selected?.name || "无"}</p></div><div className="toolbar"><button disabled={!selected} onClick={() => selected && setProjectModal(selected)}>编辑</button><button className="primary" onClick={() => setProjectModal("new")}>新建项目</button></div></div>
-            <ProjectTable projects={data.projects} selectedId={selectedId} onSelect={setSelectedId} active={data.active} liveTick={liveTick} />
+            <ProjectTable projects={data.projects} selectedId={selectedId} onSelect={setSelectedId} actives={data.actives} liveTick={liveTick} />
           </section>
         </>}
 
@@ -182,8 +183,8 @@ export default function Home() {
 function Metric({ title, value }: { title: string; value: string }) { return <div className="metric"><span>{title}</span><strong>{value}</strong></div>; }
 function Progress({ value }: { value: number }) { return <div className="progress"><i style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div>; }
 
-function ProjectTable({ projects, selectedId, onSelect, active, liveTick }: { projects: Project[]; selectedId: number | null; onSelect: (id: number) => void; active: Active; liveTick: number }) {
-  return <div className="table-wrap"><table><thead><tr><th>项目名称</th><th>分类</th><th>优先级</th><th>状态</th><th>完成度</th><th>已用 / 预算</th></tr></thead><tbody>{projects.map((item) => { const used = Number(item.total_seconds) + (active?.project_id === item.id ? activeDuration(active, liveTick) : 0); return <tr key={item.id} className={selectedId === item.id ? "selected" : ""} onClick={() => onSelect(item.id)}><td>{item.name}</td><td><b className="pill" style={{ background: item.category_color }}>{item.category_name}</b></td><td><b className={`pill priority-${item.priority}`}>{priorityText[item.priority]}</b></td><td>{statusText[item.status]}</td><td>{item.progress_percent}%</td><td>{formatDuration(used)} / {formatDuration(item.budget_minutes * 60)}</td></tr>; })}</tbody></table></div>;
+function ProjectTable({ projects, selectedId, onSelect, actives, liveTick }: { projects: Project[]; selectedId: number | null; onSelect: (id: number) => void; actives: Active[]; liveTick: number }) {
+  return <div className="table-wrap"><table><thead><tr><th>项目名称</th><th>分类</th><th>优先级</th><th>状态</th><th>完成度</th><th>已用 / 预算</th></tr></thead><tbody>{projects.map((item) => { const active = actives.find((timer) => timer.project_id === item.id) ?? null; const used = Number(item.total_seconds) + activeDuration(active, liveTick); return <tr key={item.id} className={selectedId === item.id ? "selected" : ""} onClick={() => onSelect(item.id)}><td>{item.name}</td><td><b className="pill" style={{ background: item.category_color }}>{item.category_name}</b></td><td><b className={`pill priority-${item.priority}`}>{priorityText[item.priority]}</b></td><td>{statusText[item.status]}</td><td>{item.progress_percent}%</td><td>{formatDuration(used)} / {formatDuration(item.budget_minutes * 60)}</td></tr>; })}</tbody></table></div>;
 }
 
 function Records({ data, onAdd, onEdit }: { data: State; onAdd: () => void; onEdit: (session: Session) => void }) {
