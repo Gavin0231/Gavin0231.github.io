@@ -73,6 +73,7 @@ export default function Home() {
   async function load() {
     try {
       const json = await loadCloudState();
+      localStorage.setItem("content-workbench-local-state-v1", JSON.stringify(json));
       setData(json);
       setSelectedId((current) => current ?? json.actives[0]?.project_id ?? json.projects[0]?.id ?? null);
       document.title = String(json.settings?.display_name || "内容工作台");
