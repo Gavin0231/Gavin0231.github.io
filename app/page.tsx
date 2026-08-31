@@ -80,6 +80,7 @@ export default function Home() {
           if (cloud.projects.length || cloud.sessions.length) {
             localStorage.setItem("content-workbench-local-state-v1", JSON.stringify(cloud));
             json = cloud;
+            setRestoreRequired(false);
           }
         } else setRestoreRequired(true);
       }
@@ -94,6 +95,10 @@ export default function Home() {
   }
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { if (session) load(); });
+    return () => listener.subscription.unsubscribe();
+  }, []);
   useEffect(() => {
     if (!data?.actives.length) return;
     const id = setInterval(() => setLiveTick(Date.now()), 1000);
