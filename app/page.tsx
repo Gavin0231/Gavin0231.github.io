@@ -91,8 +91,13 @@ export default function Home() {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { setUserId(session?.user.id || null); setAuthReady(true); });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { setUserId(session?.user.id || null); setAuthReady(true); });
+    const finishAuth = (session: { user: { id: string } } | null) => {
+      setUserId(session?.user.id || null);
+      setAuthReady(true);
+      if (window.location.hash.includes("access_token=")) window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    };
+    supabase.auth.getSession().then(({ data: { session } }) => finishAuth(session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => finishAuth(session));
     return () => listener.subscription.unsubscribe();
   }, []);
   useEffect(() => { if (userId) load(); else setData(null); }, [userId]);
@@ -137,7 +142,7 @@ export default function Home() {
   }, [data, liveTick]);
 
   if (!authReady) return <main className="loading">正在打开内容工作台…</main>;
-  if (!userId) return <main className="login"><section><h1>内容工作台</h1><p>使用你的 Google 账号登录，在不同电脑上继续同一份项目和工时。</p><button className="primary" onClick={() => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } })}>使用 Google 账号登录</button>{error && <div className="error">{error}</div>}</section></main>;
+  if (!userId) return <main className="login"><section><h1>内容工作台</h1><p>使用你的 Google 账号登录，在不同电脑上继续同一份项目和工时。</p><button className="primary" onClick={() => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + window.location.pathname } })}>使用 Google 账号登录</button>{error && <div className="error">{error}</div>}</section></main>;
   if (!data) return <main className="loading">{error || "正在读取内容工作台…"}</main>;
   const displayName = String(data.settings.display_name || "内容工作台");
   const selected = data.projects.find((item) => item.id === selectedId) ?? null;
