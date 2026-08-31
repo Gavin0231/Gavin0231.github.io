@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { loadLocalState, performLocalAction } from "../src/local";
+import { loadLocalState, performLocalAction, periodSeconds } from "../src/local";
 
 type Category = { id: number; name: string; color: string; default_budget_minutes: number };
 type Project = {
@@ -105,18 +105,15 @@ export default function Home() {
     const weekStart = new Date(dayStart); weekStart.setDate(dayStart.getDate() - ((dayStart.getDay() + 6) % 7));
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const totals = data.sessions.reduce((sum, item) => {
-      const start = new Date(item.started_at);
-      if (start >= dayStart) sum.today += Number(item.effective_seconds);
-      if (start >= weekStart) sum.week += Number(item.effective_seconds);
-      if (start >= monthStart) sum.month += Number(item.effective_seconds);
+      sum.today += periodSeconds(item, dayStart, liveTick);
+      sum.week += periodSeconds(item, weekStart, liveTick);
+      sum.month += periodSeconds(item, monthStart, liveTick);
       return sum;
     }, { today: 0, week: 0, month: 0 });
     for (const active of data.actives) {
-      const live = activeDuration(active, liveTick);
-      const start = new Date(active.started_at);
-      if (start >= dayStart) totals.today += live;
-      if (start >= weekStart) totals.week += live;
-      if (start >= monthStart) totals.month += live;
+      totals.today += periodSeconds(active, dayStart, liveTick);
+      totals.week += periodSeconds(active, weekStart, liveTick);
+      totals.month += periodSeconds(active, monthStart, liveTick);
     }
     return totals;
   }, [data, liveTick]);

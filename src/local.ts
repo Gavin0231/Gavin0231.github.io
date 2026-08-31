@@ -46,8 +46,34 @@ function refreshTotals(state: LocalState) {
   for (const project of state.projects) project.total_seconds = state.sessions.filter((session) => Number(session.project_id) === Number(project.id)).reduce((total, session) => total + Number(session.effective_seconds || 0), 0);
 }
 
+function ensureWorkSegments(active: any) {
+  if (Array.isArray(active.work_segments)) return;
+  active.work_segments = [];
+  active.unsegmented_seconds = Number(active.accumulated_seconds || 0);
+  if (active.state === "paused" && active.last_resumed_at && active.paused_at) {
+    const end = Date.parse(active.paused_at);
+    const seconds = Math.min(active.unsegmented_seconds, Math.max(0, Math.floor((end - Date.parse(active.last_resumed_at)) / 1000)));
+    if (Number.isFinite(seconds) && seconds > 0) {
+      active.work_segments.push({ started_at: new Date(end - seconds * 1000).toISOString(), ended_at: active.paused_at });
+      active.unsegmented_seconds -= seconds;
+    }
+  }
+}
+
+export function periodSeconds(item: any, periodStart: Date, now: number) {
+  const boundary = periodStart.getTime();
+  const started = Date.parse(item.started_at);
+  const overlap = (start: string, end: string | number) => Math.max(0, Math.floor((Math.min(typeof end === "number" ? end : Date.parse(end), now) - Math.max(Date.parse(start), boundary)) / 1000));
+  if (!Array.isArray(item.work_segments)) return started >= boundary && started <= now ? Number(item.effective_seconds || 0) : 0;
+  let total = started >= boundary && started <= now ? Number(item.unsegmented_seconds || 0) : 0;
+  for (const segment of item.work_segments) total += overlap(segment.started_at, segment.ended_at);
+  if (item.state === "running" && item.last_resumed_at) total += overlap(item.last_resumed_at, now);
+  return total;
+}
+
 export async function loadLocalState() {
   const state = read();
+  state.actives.forEach(ensureWorkSegments);
   refreshTotals(state);
   write(state);
   return state;
@@ -62,18 +88,21 @@ export async function performLocalAction(payload: Record<string, any>) {
   if (payload.action === "start") {
     if (!project) throw new Error("项目不存在");
     if (state.actives.some((item) => Number(item.project_id) === Number(project.id))) throw new Error("该项目已在计时");
-    state.actives.push({ project_id: project.id, project_name: project.name, category_name: project.category_name, category_color: project.category_color, state: "running", started_at: nowIso, last_resumed_at: nowIso, paused_at: null, accumulated_seconds: 0, accumulated_pause_seconds: 0, budget_minutes: project.budget_minutes, progress_percent: project.progress_percent });
+    state.actives.push({ project_id: project.id, project_name: project.name, category_name: project.category_name, category_color: project.category_color, state: "running", started_at: nowIso, last_resumed_at: nowIso, paused_at: null, accumulated_seconds: 0, accumulated_pause_seconds: 0, work_segments: [], unsegmented_seconds: 0, budget_minutes: project.budget_minutes, progress_percent: project.progress_percent });
     project.status = "active";
     project.updated_at = nowIso;
   } else if (payload.action === "pause") {
     const active = state.actives.find((item) => Number(item.project_id) === Number(payload.projectId));
     if (!active || active.state !== "running") throw new Error("当前没有运行中的计时");
+    ensureWorkSegments(active);
+    active.work_segments.push({ started_at: active.last_resumed_at, ended_at: nowIso });
     active.accumulated_seconds = Number(active.accumulated_seconds || 0) + Math.max(0, Math.floor((now.getTime() - Date.parse(active.last_resumed_at)) / 1000));
     active.state = "paused";
     active.paused_at = nowIso;
   } else if (payload.action === "resume") {
     const active = state.actives.find((item) => Number(item.project_id) === Number(payload.projectId));
     if (!active || active.state !== "paused") throw new Error("当前没有暂停中的计时");
+    ensureWorkSegments(active);
     active.accumulated_pause_seconds = Number(active.accumulated_pause_seconds || 0) + Math.max(0, Math.floor((now.getTime() - Date.parse(active.paused_at)) / 1000));
     active.state = "running";
     active.last_resumed_at = nowIso;
@@ -81,8 +110,10 @@ export async function performLocalAction(payload: Record<string, any>) {
   } else if (payload.action === "stop") {
     const active = state.actives.find((item) => Number(item.project_id) === Number(payload.projectId));
     if (!active) throw new Error("当前没有计时");
+    ensureWorkSegments(active);
+    if (active.state === "running" && active.last_resumed_at) active.work_segments.push({ started_at: active.last_resumed_at, ended_at: nowIso });
     const effective = Number(active.accumulated_seconds || 0) + (active.state === "running" ? Math.max(0, Math.floor((now.getTime() - Date.parse(active.last_resumed_at)) / 1000)) : 0);
-    state.sessions.unshift({ id: nextId(state.sessions), project_id: active.project_id, project_name: active.project_name, category_name: active.category_name, started_at: active.started_at, ended_at: nowIso, effective_seconds: effective, pause_seconds: Number(active.accumulated_pause_seconds || 0), notes: "", is_manual_adjusted: 0, is_deleted: false, created_at: nowIso, updated_at: nowIso });
+    state.sessions.unshift({ id: nextId(state.sessions), project_id: active.project_id, project_name: active.project_name, category_name: active.category_name, started_at: active.started_at, ended_at: nowIso, effective_seconds: effective, pause_seconds: Number(active.accumulated_pause_seconds || 0), work_segments: active.work_segments, unsegmented_seconds: Number(active.unsegmented_seconds || 0), notes: "", is_manual_adjusted: 0, is_deleted: false, created_at: nowIso, updated_at: nowIso });
     state.actives = state.actives.filter((item) => Number(item.project_id) !== Number(active.project_id));
   } else if (payload.action === "saveProject") {
     const name = String(payload.name || "").trim();
@@ -109,7 +140,7 @@ export async function performLocalAction(payload: Record<string, any>) {
     if (payload.id) {
       const existing = state.sessions.find((item) => Number(item.id) === Number(payload.id));
       if (!existing) throw new Error("工时记录不存在");
-      Object.assign(existing, row);
+      Object.assign(existing, row, { work_segments: undefined, unsegmented_seconds: undefined });
     } else state.sessions.unshift({ id: nextId(state.sessions), ...row, created_at: nowIso });
   } else if (payload.action === "deleteSession") {
     state.sessions = state.sessions.filter((item) => Number(item.id) !== Number(payload.id));
