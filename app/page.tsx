@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { loadLocalState, performLocalAction } from "../src/local";
-import { loadCloudState, supabase } from "../src/cloud";
 
 type Category = { id: number; name: string; color: string; default_budget_minutes: number };
 type Project = {
@@ -68,22 +67,10 @@ export default function Home() {
   const [projectModal, setProjectModal] = useState<Project | "new" | null>(null);
   const [sessionModal, setSessionModal] = useState<Session | "new" | null>(null);
   const [liveTick, setLiveTick] = useState(Date.now());
-  const [restoreRequired, setRestoreRequired] = useState(false);
 
   async function load() {
     try {
-      let json = await loadLocalState();
-      if (json.projects.length === 0 && json.sessions.length === 0) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          const cloud = await loadCloudState();
-          if (cloud.projects.length || cloud.sessions.length) {
-            localStorage.setItem("content-workbench-local-state-v1", JSON.stringify(cloud));
-            json = cloud;
-            setRestoreRequired(false);
-          }
-        } else setRestoreRequired(true);
-      }
+      const json = await loadLocalState();
       setData(json);
       setSelectedId((current) => current ?? json.actives[0]?.project_id ?? json.projects[0]?.id ?? null);
       document.title = String(json.settings?.display_name || "内容工作台");
@@ -95,10 +82,6 @@ export default function Home() {
   }
 
   useEffect(() => { load(); }, []);
-  useEffect(() => {
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { if (session) load(); });
-    return () => listener.subscription.unsubscribe();
-  }, []);
   useEffect(() => {
     if (!data?.actives.length) return;
     const id = setInterval(() => setLiveTick(Date.now()), 1000);
@@ -148,10 +131,9 @@ export default function Home() {
       <aside className="sidebar">
         <div><div className="brand">{displayName}</div><p>专注当前项目，记录真实工时</p></div>
         <nav>{["工作台", "工时记录", "统计图表", "设置中心"].map((item) => <button key={item} className={page === item ? "active" : ""} onClick={() => setPage(item)}>{item}</button>)}</nav>
-        <small>V1 · 云端版</small>
+        <small>V1 · 本机版</small>
       </aside>
       <section className="content">
-        {restoreRequired && <div className="error">当前浏览器尚未迁移原有数据。<button onClick={() => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + window.location.pathname } })}>恢复原有数据</button></div>}
         {error && <div className="error">{error}<button onClick={() => setError("")}>×</button></div>}
         {page === "工作台" && <>
           <header><h1>工作台</h1><p>选择一个项目，进入当前工作区并记录真实投入时间。</p></header>
