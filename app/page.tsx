@@ -77,13 +77,6 @@ export default function Home() {
       setError("");
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "读取失败";
-      if (message.toLowerCase().includes("jwt issued at future")) {
-        await supabase.auth.signOut({ scope: "local" });
-        setUserId(null);
-        setData(null);
-        setError("登录状态已失效，请重新登录");
-        return;
-      }
       setError(message);
     }
   }
